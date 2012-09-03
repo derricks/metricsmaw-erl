@@ -51,8 +51,11 @@ connect_socket(Host,Port) ->
 		{ok,Socket} -> {Host,Port,Socket};
 	    {error,Reason} ->
 		    io:format("Could not connect to ~p:~p - ~p~n",[Host,Port,Reason]),
-		    {Host,Port,null}
+		    socket_error_state(Host,Port)
 	end.
+	
+socket_error_state(Host,Port) -> {Host,Port,null}.
+log_socket_error({error,Reason}) -> io:format("Error sending data over socket ~p~n",[Reason]).
 	
 % gen_server behaviour methods
 
@@ -73,10 +76,16 @@ handle_call(Request,From,{Host,Port,null}) ->
 		 {Host,Port,null} -> {reply,undefined,SocketConnectResponse};
 		 {Host,Port,_Socket} -> handle_call(Request,From,SocketConnectResponse)
     end;
-handle_call({current_value,MetricName},_From,{_Host,_Port,Socket}=State) ->
-	gen_tcp:send(Socket,term_to_binary({get,MetricName})),
-	Response = gen_tcp:recv(Socket,0),
-	{reply,binary_to_term(Response),State}.
+handle_call({current_value,MetricName},_From,{Host,Port,Socket}=State) ->
+	case gen_tcp:send(Socket,term_to_binary({get,MetricName})) of
+		ok -> 
+		    Response = gen_tcp:recv(Socket,0),
+			{reply,binary_to_term(Response),State};
+		{error,_Reason}=TcpError -> 
+		    gen_tcp:close(Socket),
+		    log_socket_error(TcpError),
+		    {reply,TcpError,socket_error_state(Host,Port)}
+	end.
 	
 % only one cast currently supported: add data	
 % as with handle_call, check undefined socket first
@@ -86,9 +95,13 @@ handle_cast(Request,{Host,Port,null}) ->
 		{Host,Port,null} -> {noreply,SocketConnectResponse};
 		{Host,Port,_Socket} -> handle_cast(Request,SocketConnectResponse)
 	end;
-handle_cast({add,_MetricName,_MetricType,_Data}=Request,{_Host,_Port,Socket}=State) ->
-	gen_tcp:send(Socket,term_to_binary(Request)),
-	{noreply,State}.
+handle_cast({add,_MetricName,_MetricType,_Data}=Request,{Host,Port,Socket}=State) ->
+	case gen_tcp:send(Socket,term_to_binary(Request)) of
+		ok -> {noreply,State};
+		{error,_Reason}=TcpError ->
+			log_socket_error(TcpError),
+			{noreply,socket_error_state(Host,Port)}
+	end.
 	
 handle_info(_Info,State) -> {noreply,State}.
 
