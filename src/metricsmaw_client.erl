@@ -76,7 +76,7 @@ handle_call(Request,From,{Host,Port,null}) ->
 		 {Host,Port,null} -> {reply,undefined,SocketConnectResponse};
 		 {Host,Port,_Socket} -> handle_call(Request,From,SocketConnectResponse)
     end;
-handle_call({current_value,MetricName},_From,{Host,Port,Socket}=State) ->
+handle_call({current_value,MetricName}=Metric,From,{Host,Port,Socket}=State) ->
 	case gen_tcp:send(Socket,term_to_binary({get,MetricName})) of
 		ok -> 
 		    Response = gen_tcp:recv(Socket,0),
@@ -84,7 +84,7 @@ handle_call({current_value,MetricName},_From,{Host,Port,Socket}=State) ->
 		{error,_Reason}=TcpError -> 
 		    gen_tcp:close(Socket),
 		    log_socket_error(TcpError),
-		    {reply,TcpError,socket_error_state(Host,Port)}
+		    handle_call(Metric,From,socket_error_state(Host,Port)) % this will first try reconnect and, if it fails, return an error message
 	end.
 	
 % only one cast currently supported: add data	
@@ -100,7 +100,8 @@ handle_cast({add,_MetricName,_MetricType,_Data}=Request,{Host,Port,Socket}=State
 		ok -> {noreply,State};
 		{error,_Reason}=TcpError ->
 			log_socket_error(TcpError),
-			{noreply,socket_error_state(Host,Port)}
+			% see note in handle_call
+			handle_cast(Request,socket_error_state(Host,Port))
 	end.
 	
 handle_info(_Info,State) -> {noreply,State}.
