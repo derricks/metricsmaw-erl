@@ -4,7 +4,8 @@
 -behaviour(gen_server).
 
 % exported methods for sending data
--export([increment_counter/1,increment_counter/2,decrement_counter/1,decrement_counter/2,set_gauge/2,mark_minute/1,mark_minute/2,current_value/1,start/1,start/0]).
+-export([increment_counter/1,increment_counter/2,decrement_counter/1,decrement_counter/2,set_gauge/2,mark_minute/1,mark_minute/2,current_value/1,start/1,start/0,
+         all_metric_names/0]).
 
 % gen_server exports
 -export([init/1,handle_call/3,handle_cast/2,handle_info/2,terminate/2,code_change/3]).
@@ -44,6 +45,8 @@ mark_minute(Meter,Amount) -> gen_server:cast(?MODULE,{add,Meter,meter_minute,Amo
 
 current_value(MetricName) -> gen_server:call(?MODULE,{current_value,MetricName}).
 
+all_metric_names() -> gen_server:call(?MODULE,{all_metric_names}).
+
 
 % private methods
 connect_socket(Host,Port) ->
@@ -56,6 +59,21 @@ connect_socket(Host,Port) ->
 	
 socket_error_state(Host,Port) -> {Host,Port,null}.
 log_socket_error({error,Reason}) -> io:format("Error sending data over socket ~p~n",[Reason]).
+
+% refactors out common logic for dealing with socket chatter to server
+% sends MessageToSend to socket and, if it fails, invokes handle_call with MessageToHandleCall, etc.
+gen_socket_comm(MessageToSend,MessageToHandleCall,From,{Host,Port,Socket}=State) ->
+	case gen_tcp:send(Socket,term_to_binary(MessageToSend)) of
+		ok -> 
+		  receive
+		   	{tcp,Socket,Data} ->
+		    {reply,binary_to_term(Data),State}
+	      end;
+		{error,_Reason}=TcpError ->
+			gen_tcp:close(Socket),
+			log_socket_error(TcpError),
+			handle_call(MessageToHandleCall,From,socket_error_state(Host,Port))
+		end.
 	
 % gen_server behaviour methods
 
@@ -76,16 +94,12 @@ handle_call(Request,From,{Host,Port,null}) ->
 		 {Host,Port,null} -> {reply,undefined,SocketConnectResponse};
 		 {Host,Port,_Socket} -> handle_call(Request,From,SocketConnectResponse)
     end;
-handle_call({current_value,MetricName}=Metric,From,{Host,Port,Socket}=State) ->
-	case gen_tcp:send(Socket,term_to_binary({get,MetricName})) of
-		ok -> 
-		    Response = gen_tcp:recv(Socket,0),
-			{reply,binary_to_term(Response),State};
-		{error,_Reason}=TcpError -> 
-		    gen_tcp:close(Socket),
-		    log_socket_error(TcpError),
-		    handle_call(Metric,From,socket_error_state(Host,Port)) % this will first try reconnect and, if it fails, return an error message
-	end.
+
+handle_call({current_value,MetricName}=Metric,From,State) ->
+	gen_socket_comm({get,MetricName},Metric,From,State);
+
+handle_call({all_metric_names}=Request,From,State) ->
+	gen_socket_comm(Request,Request,From,State).
 	
 % only one cast currently supported: add data	
 % as with handle_call, check undefined socket first
