@@ -5,7 +5,7 @@
 
 % exported methods for sending data
 -export([increment_counter/1,increment_counter/2,decrement_counter/1,decrement_counter/2,set_gauge/2,mark_minute/1,mark_minute/2,current_value/1,start/1,start/0,
-         all_metric_names/0]).
+         all_metric_names/0,get_metric_details/1]).
 
 % gen_server exports
 -export([init/1,handle_call/3,handle_cast/2,handle_info/2,terminate/2,code_change/3]).
@@ -47,6 +47,7 @@ current_value(MetricName) -> gen_server:call(?MODULE,{current_value,MetricName})
 
 all_metric_names() -> gen_server:call(?MODULE,{all_metric_names}).
 
+get_metric_details(MetricName) -> gen_server:call(?MODULE,{get_metric_details,MetricName}).
 
 % private methods
 connect_socket(Host,Port) ->
@@ -97,10 +98,13 @@ handle_call(Request,From,{Host,Port,null}) ->
 
 handle_call({current_value,MetricName}=Metric,From,State) ->
 	gen_socket_comm({get,MetricName},Metric,From,State);
-
-handle_call({all_metric_names}=Request,From,State) ->
-	gen_socket_comm(Request,Request,From,State).
 	
+% for the generic case where the Request is both what to send over the socket and what to pass along to handle_call if the socket is closed
+handle_call(Request,From,State) 
+    when is_tuple(Request), element(1,Request) =:= all_metric_names;
+         is_tuple(Request), element(1,Request) =:= get_metric_details ->
+	gen_socket_comm(Request,Request,From,State).
+		
 % only one cast currently supported: add data	
 % as with handle_call, check undefined socket first
 handle_cast(Request,{Host,Port,null}) ->
